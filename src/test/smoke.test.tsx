@@ -111,6 +111,55 @@ describe("HomePage", () => {
     });
   });
 
+  it("syncs a confirmed draft to ledger and shows success state", async () => {
+    // Mock parse endpoint
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ draft: mockDraft }),
+    });
+
+    render(<HomePage />);
+
+    // Parse an expense
+    const input = screen.getByPlaceholderText(/e\.g\. Paid 350 baht/);
+    fireEvent.change(input, {
+      target: { value: "Paid 350 baht for lunch" },
+    });
+    fireEvent.click(screen.getByText("Parse with AI"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Parsed Draft")).toBeInTheDocument();
+    });
+
+    // Confirm locally
+    fireEvent.click(screen.getByText("Confirm Locally"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Lunch at food court")).toBeInTheDocument();
+    });
+
+    // Mock sync endpoint — capture request body to verify id is sent
+    let syncRequestBody: unknown = null;
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementationOnce(async (_url: string, opts: RequestInit) => {
+      syncRequestBody = opts.body ? JSON.parse(opts.body as string) : null;
+      return { ok: true, json: async () => ({ synced: true, transactionId: "12345" }) };
+    });
+
+    // Click sync button
+    fireEvent.click(screen.getByText("Sync to Ledger"));
+
+    // Wait for synced state
+    await waitFor(() => {
+      expect(screen.getByText("Synced to Ledger")).toBeInTheDocument();
+      expect(screen.getByText(/ID: 12345/)).toBeInTheDocument();
+    });
+
+    // Verify request body includes id
+    expect(syncRequestBody).not.toBeNull();
+    expect((syncRequestBody as Record<string, unknown>).id).toBeTypeOf("string");
+    expect(((syncRequestBody as Record<string, unknown>).id as string).length).toBeGreaterThan(0);
+  });
+
   it("shows validation error when date is invalid", async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,

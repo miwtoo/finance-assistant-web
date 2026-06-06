@@ -31,6 +31,10 @@ interface ExpenseDraft {
 interface ConfirmedDraft extends ExpenseDraft {
   id: string;
   confirmedAt: string;
+  syncStatus?: "idle" | "syncing" | "synced" | "error";
+  syncedAt?: string;
+  fireflyTransactionId?: string | null;
+  syncError?: string;
 }
 
 /* ---------- constants ---------- */
@@ -179,6 +183,69 @@ export function HomePage() {
     handleCancel();
   }, [draft, editAmount, editCurrency, editDescription, editSpentAt, editMerchant, editCategoryHint, handleCancel]);
 
+  /* ---- sync to ledger ---- */
+
+  const handleSyncDraft = useCallback(async (id: string) => {
+    setConfirmedDrafts((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, syncStatus: "syncing" as const, syncError: undefined } : d)),
+    );
+
+    const draft = confirmedDrafts.find((d) => d.id === id);
+    if (!draft) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/sync-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: draft.id,
+          amount: draft.amount,
+          currency: draft.currency,
+          description: draft.description,
+          spentAt: draft.spentAt,
+          merchant: draft.merchant,
+          categoryHint: draft.categoryHint,
+          confidence: draft.confidence,
+          rawText: draft.rawText,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setConfirmedDrafts((prev) =>
+          prev.map((d) =>
+            d.id === id
+              ? { ...d, syncStatus: "error" as const, syncError: data.error || `HTTP ${res.status}` }
+              : d,
+          ),
+        );
+        return;
+      }
+
+      setConfirmedDrafts((prev) =>
+        prev.map((d) =>
+          d.id === id
+            ? {
+                ...d,
+                syncStatus: "synced" as const,
+                syncedAt: new Date().toISOString(),
+                fireflyTransactionId: data.transactionId ?? null,
+              }
+            : d,
+        ),
+      );
+    } catch (err) {
+      setConfirmedDrafts((prev) =>
+        prev.map((d) =>
+          d.id === id
+            ? { ...d, syncStatus: "error" as const, syncError: err instanceof Error ? err.message : "Network error" }
+            : d,
+        ),
+      );
+    }
+  }, [confirmedDrafts]);
+
   /* ---- render ---- */
 
   return (
@@ -296,8 +363,8 @@ export function HomePage() {
           <Typography variant="h6" gutterBottom>
             Confirmed Drafts ({confirmedDrafts.length})
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            These drafts are saved locally and ready for later sync to your ledger.
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Sync confirmed drafts to your ledger (Firefly III). The backend uses a configured Firefly source account.
           </Typography>
           <Stack spacing={2}>
             {confirmedDrafts.map((cd) => (
@@ -309,7 +376,45 @@ export function HomePage() {
                     {cd.merchant ? ` · ${cd.merchant}` : ""}
                     {cd.categoryHint ? ` · ${cd.categoryHint}` : ""}
                   </Typography>
-                  <Chip label="Ready for later sync" size="small" sx={{ mt: 1 }} />
+                  <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                    {cd.syncStatus === "synced" ? (
+                      <>
+                        <Chip label="Synced to Ledger" color="success" size="small" />
+                        {cd.fireflyTransactionId && (
+                          <Typography variant="caption" color="text.secondary">
+                            ID: {cd.fireflyTransactionId}
+                          </Typography>
+                        )}
+                      </>
+                    ) : cd.syncStatus === "error" ? (
+                      <>
+                        <Chip label="Sync Error" color="error" size="small" />
+                        {cd.syncError && (
+                          <Typography variant="caption" color="error">
+                            {cd.syncError}
+                          </Typography>
+                        )}
+                        <Button size="small" variant="outlined" onClick={() => handleSyncDraft(cd.id)}>
+                          Retry Sync
+                        </Button>
+                      </>
+                    ) : cd.syncStatus === "syncing" ? (
+                      <>
+                        <CircularProgress size={16} />
+                        <Typography variant="caption" color="text.secondary">
+                          Syncing...
+                        </Typography>
+                      </>
+                    ) : (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleSyncDraft(cd.id)}
+                      >
+                        Sync to Ledger
+                      </Button>
+                    )}
+                  </Box>
                 </CardContent>
               </Card>
             ))}

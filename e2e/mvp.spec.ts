@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 /* ---------- constants ---------- */
 
 const API_ENDPOINT = "http://localhost:3000/api/parse-expense";
+const SYNC_API_ENDPOINT = "http://localhost:3000/api/sync-draft";
 
 const MOCK_DRAFT = {
   amount: 350,
@@ -29,6 +30,16 @@ async function setupApiMock(page: Page) {
   });
 }
 
+async function setupSyncApiMock(page: Page, status = 200, body?: Record<string, unknown>) {
+  await page.route(SYNC_API_ENDPOINT, async (route) => {
+    await route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify(body ?? { synced: true, transactionId: "txn_abc123" }),
+    });
+  });
+}
+
 async function clearStorage(page: Page) {
   await page.evaluate(() => localStorage.clear());
 }
@@ -40,6 +51,7 @@ test.describe("MVP tracer bullet", () => {
     await page.goto("/");
     await clearStorage(page);
     await setupApiMock(page);
+    await setupSyncApiMock(page);
     // Reload so the app picks up the cleared localStorage and route mock
     await page.reload();
   });
@@ -119,7 +131,7 @@ test.describe("MVP tracer bullet", () => {
 
     // 10. Verify confirmed draft persists across reloads
     await expect(
-      page.getByText("Confirmed Drafts"),
+      page.getByRole("heading", { name: /Confirmed Drafts/ }),
     ).toBeVisible();
     await expect(
       page.getByText("Lunch at central food court"),
@@ -204,5 +216,72 @@ test.describe("MVP tracer bullet", () => {
 
     // Wait for draft to appear (loading finished)
     await expect(page.getByText("Parsed Draft")).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("sync flow: confirm locally then sync to ledger shows synced state and transaction id", async ({ page }) => {
+    // Arrange: parse and confirm a draft
+    await page.getByPlaceholder(/e\.g\. Paid 350 baht/).fill(INPUT_TEXT);
+    await page.getByRole("button", { name: "Parse with AI" }).click();
+    await expect(page.getByText("Parsed Draft")).toBeVisible();
+    await page.getByRole("button", { name: "Confirm Locally" }).click();
+
+    // Confirm has completed
+    await expect(page.getByText(/Confirmed Drafts/)).toBeVisible();
+    await expect(page.getByText("Lunch at food court")).toBeVisible();
+
+    // Capture the sync request payload
+    let syncRequestBody: unknown = null;
+    await page.unroute(SYNC_API_ENDPOINT);
+    await page.route(SYNC_API_ENDPOINT, async (route) => {
+      const postData = route.request().postData();
+      syncRequestBody = postData ? JSON.parse(postData) : null;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ synced: true, transactionId: "txn_abc123" }),
+      });
+    });
+
+    // Act: click Sync to Ledger
+    await page.getByRole("button", { name: "Sync to Ledger" }).click();
+
+    // Assert: synced state visible
+    await expect(page.getByText("Synced to Ledger")).toBeVisible();
+    await expect(page.getByText(/ID: txn_abc123/)).toBeVisible();
+
+    // Assert: request body included a non-empty id
+    expect(syncRequestBody).not.toBeNull();
+    expect((syncRequestBody as Record<string, unknown>).id).toBeDefined();
+    expect(String((syncRequestBody as Record<string, unknown>).id).length).toBeGreaterThan(0);
+  });
+
+  test("sync error: server error shows sync error chip, error message, and retry button", async ({ page }) => {
+    // Arrange: parse and confirm a draft
+    await page.getByPlaceholder(/e\.g\. Paid 350 baht/).fill(INPUT_TEXT);
+    await page.getByRole("button", { name: "Parse with AI" }).click();
+    await expect(page.getByText("Parsed Draft")).toBeVisible();
+    await page.getByRole("button", { name: "Confirm Locally" }).click();
+
+    // Confirm has completed
+    await expect(page.getByText(/Confirmed Drafts/)).toBeVisible();
+    await expect(page.getByText("Lunch at food court")).toBeVisible();
+
+    // Override sync mock to return a server error
+    await page.unroute(SYNC_API_ENDPOINT);
+    await page.route(SYNC_API_ENDPOINT, async (route) => {
+      await route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Backend unavailable" }),
+      });
+    });
+
+    // Act: click Sync to Ledger
+    await page.getByRole("button", { name: "Sync to Ledger" }).click();
+
+    // Assert: error state visible
+    await expect(page.getByText("Sync Error")).toBeVisible();
+    await expect(page.getByText("Backend unavailable")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry Sync" })).toBeVisible();
   });
 });
