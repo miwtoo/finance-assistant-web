@@ -1,0 +1,6 @@
+import { createRootRoute } from "@tanstack/react-router";
+import { AppShell } from "../components/AppShell.tsx";
+
+export const Route = createRootRoute({
+  component: AppShell,
+});
