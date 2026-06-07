@@ -10,9 +10,12 @@
     "typecheck": "tsc -b",
     "preview": "vite preview",
     "test": "vitest",
-    "e2e": "playwright test",
-    "e2e:ui": "playwright test --ui",
-    "e2e:install": "playwright install"
+    "e2e": "cd e2e && bun run e2e",
+    "e2e:gen": "cd e2e && bun run e2e:gen",
+    "e2e:headed": "cd e2e && bun run e2e:headed",
+    "e2e:install": "cd e2e && bun run browsers:install",
+    "e2e:ui": "cd e2e && bun run e2e:ui",
+    "typecheck:e2e": "cd e2e && bun run typecheck"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -28,7 +31,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.57.0",
     "@tanstack/router-plugin": "^1.168.16",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
